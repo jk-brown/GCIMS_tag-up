@@ -55,7 +55,7 @@ core_list <- lapply(ini_list, newcore)
 
 set.seed(123)
 
-n = 100
+n = 10000
 
 init_params <- generate_params(core = core_list[[1]], draws = n)
 
@@ -132,6 +132,8 @@ scores <-  lapply(init_result, function(df) {
   score_list = list(scores_co2, scores_gmst)
   
   mc_scores = multi_criteria_weighting(score_list)
+  
+  mc_scores_na_rm = na.omit(mc_scores)
   
 })
 
