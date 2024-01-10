@@ -18,7 +18,7 @@ library(ggplot2)
 library(see)
 # force load the dev branch of Matilda to pick-up error corrections
 # if on windows and R won't install first run this in console --> options(download.file.method = "wininet") 
-remotes::install_github("jgcri/matilda@dev", force = T)
+remotes::install_github("jgcri/matilda@posterior_likelihood_calc", force = T)
 library(matilda)
 library(parallel)
 library(dplyr)
@@ -55,7 +55,7 @@ core_list <- lapply(ini_list, newcore)
 
 set.seed(123)
 
-n = 10
+n = 100
 
 init_params <- generate_params(core = core_list[[1]], draws = n)
 
@@ -66,7 +66,17 @@ init_params <- generate_params(core = core_list[[1]], draws = n)
 ```{r}
 cluster <- makeCluster(detectCores() - 1)
 
-clusterExport(cluster, c("iterate_model", "init_params", "ini_list", "newcore"))
+clusterExport(cluster, c("init_params", 
+                         "ini_list", 
+                         "newcore",
+                         "iterate_model",
+                         "score_runs",
+                         "score_bayesian",
+                         "criterion_co2_obs",
+                         "criterion_gmst_obs",
+                         "multi_criteria_weighting",
+                         "merge",
+                         "na.omit"))
 
 start <- proc.time()
 
@@ -76,12 +86,12 @@ init_result <- parLapply(cluster, ini_list, function(scenario) {
   core = newcore(scenario)
   
   # call iterate_model and run Hector for each param set looping across scenarios
-  iterate_model(
-    core = core, 
-    params = init_params,
-    save_years = 1800:2100,
-    save_vars = c("CO2_concentration", "gmst")
-  )
+  result = iterate_model(core = core, 
+                         params = init_params,
+                         save_years = 1800:2100,
+                         save_vars = c("CO2_concentration", "gmst")
+                         )
+  
 })
 
 stopCluster(cluster)
@@ -104,6 +114,207 @@ init_result <- lapply(names(init_result), function(name) {
   
   return(init_result[[name]])
 })
+```
+
+# Score results 
+
+```{r}
+scores <-  lapply(init_result, function(df) {
+  
+  scores_co2 = score_runs(df, 
+                          criterion = criterion_co2_obs(),
+                          score_bayesian)
+  
+  scores_gmst = score_runs(df, 
+                           criterion = criterion_gmst_obs(),
+                           score_bayesian)
+  
+  score_list = list(scores_co2, scores_gmst)
+  
+  mc_scores = multi_criteria_weighting(score_list)
+  
+})
+
+```
+
+# Calulating metrics 
+
+Define the metric of interest:
+```{r}
+long_term_metric <- new_metric(var = GMST(), years = 2100, median)
+```
+
+calculate metric for each data frame in `init_result` after removing NAs:
+```{r}
+metric_result <- lapply(init_result, function(df){
+  
+  result_na_rm <- na.omit(df)
+  
+  metric_calc(result_na_rm, long_term_metric)
+  
+})
+
+```
+
+# Merge scores with metrics
+
+```{r}
+metric_scored <- Map(merge, metric_result, scores, by = "run_number")
+
+# bind to combined data frame
+full_metric_df <- do.call(rbind, metric_scored)
+row.names(full_metric_df) <- NULL
+
+full_metric_df$scenario <- rep(c("ssp126", "ssp245", "ssp370", "ssp585"), each = n)
+```
+
+# Now that I have median warming metrics with likelihood weights!
+
+I want to complete the following:
+
+1. compute the posterior distribution (using the likelihood weights)
+
+2. plot the prior distribution (before applying weights)
+
+3. plot the posterior distribution (after applying weights)
+
+1:
+```{r}
+full_metric_df$weighted_metrics <- full_metric_df$metric_result * full_metric_df$mc_weight
+
+full_metric_df$scale_factor <- sd(full_metric_df$metric_result) / sd(full_metric_df$weighted_metrics)
+
+full_metric_df$posterior <- full_metric_df$weighted_metrics * full_metric_df$scale_factor
+```
+
+```{r}
+ggplot() +
+  geom_density(data = full_metric_df, 
+       aes(x = metric_result),
+       alpha = 0.2,
+       color = "red",
+       fill = "red") +
+  geom_density(data = full_metric_df, 
+       aes(x = posterior),
+       alpha = 0.2,
+       color = "blue",
+       fill = "blue") +
+  labs(title = "Prior and Posterior Distributions",
+       x = "Temperature Increase",
+       y = "Density") +
+  facet_wrap(~scenario)
+```
+
+
+
+
+____
+# Post-processing
+
+Normalizing data output to reference period.
+
+First the function that normalizes the data:
+```{r}
+# Write function to normalize Matilda data to reference period
+normalize_temperature <- function(data, reference_start_year, reference_end_year) {
+  # Filter data for the reference period
+  reference_period <- subset(
+    data,
+    year >= reference_start_year &
+      year <= reference_end_year
+  )
+
+  # Calculate the mean values of reference period
+  mean_reference_period <- mean(reference_period$value)
+
+  # Calculate normalized values for each year in the data set
+  ## subtract data values by reference period mean
+  normalized_values <- data$value - mean_reference_period
+
+  # Create a new data frame with the normalized data
+  normalized_data <- data.frame(
+    year = data$year,
+    adjusted_value = normalized_values
+  )
+
+  return(normalized_data)
+}
+```
+
+Splitting full weighted result into temperature and CO2 data, this helps with calculating values normalized to a reference period and with plotting results:
+```{r}
+temp_data <- subset(result_scored,
+                    variable == GMST() &
+                    year > 1849 &
+                    year < 2101)
+
+co2_data <- subset(result_scored,
+                   variable == CONCENTRATIONS_CO2() &
+                   year > 1849 &
+                   year < 2101)
+
+```
+
+Normalize data to the 1850-1990 reference period:
+```{r}
+pre_temp_data <- normalize_temperature(temp_data, 
+                                       reference_start_year = 1850,
+                                       reference_end_year = 1900)
+
+temp_data$value_adjusted <- pre_temp_data$adjusted_value
+
+pre_co2_data <- normalize_temperature(co2_data,
+                                      reference_start_year = 1850,
+                                      reference_end_year = 1900)
+
+co2_data$value_adjusted <- pre_co2_data$adjusted_value
+
+rm(pre_co2_data, pre_temp_data)
+```
+
+
+
+
+____
+Example figure of Ensemble members against observed data:
+```{r}
+gmst_scored_ensemble <- 
+  ggplot(data = subset(temp_data,
+                       year >= 1950 
+                       & year <= 2100
+                       & variable == GMST())) +
+  geom_line(
+    aes(
+      x = year, 
+      y = value_adjusted,
+      group = run_number,
+      color = mc_weight,
+      alpha = mc_weight),
+    linewidth = 0.1) +
+  scale_color_gradient(low = "lightblue", high = "dodgerblue4", name = "Weights") +
+  scale_alpha_continuous(range(c(0, 1))) +
+  labs(x = "Years", y = "Temperature Anomaly (C)") +
+  ggtitle(label = "Hector PPE weighted by historical temperature") +
+  theme_light() +
+  guides(alpha = "none")+
+  facet_wrap(~scenario)
+gmst_scored_ensemble
+
+# Creates observed data frame - this  can be added as a layer to the plot
+# But currently only includes data from 1950-2023
+obs_dat <- data.frame(
+  year = criterion_gmst_obs()$year,
+  value_obs = criterion_gmst_obs()$obs_values
+)
+
+# Add observed CO2 values to aid visualization of most plausible models
+gmst_scored_ensemble_obs <- gmst_scored_ensemble + 
+  geom_line(
+  data = obs_dat, aes(x = year, y = value_obs),
+  color = "red",
+  linewidth = 1
+)
+gmst_scored_ensemble_obs
 ```
 
 
