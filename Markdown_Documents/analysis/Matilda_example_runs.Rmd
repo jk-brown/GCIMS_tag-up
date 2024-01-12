@@ -45,7 +45,7 @@ For each of the SSP ini files, initiate a Hector core.
 
 ```{r, results='hide'}
 
-core_list <- lapply(ini_list, newcore)
+core_params <- newcore(ini_list[[4]])
 
 ```
 
@@ -53,11 +53,11 @@ core_list <- lapply(ini_list, newcore)
 
 ```{r, results='hide'}
 
-set.seed(123)
+set.seed(999)
 
-n = 10000
+n = 1000
 
-init_params <- generate_params(core = core_list[[1]], draws = n)
+init_params <- generate_params(core = core_params, draws = n)
 
 ```
 
@@ -67,23 +67,17 @@ init_params <- generate_params(core = core_list[[1]], draws = n)
 cluster <- makeCluster(detectCores() - 1)
 
 clusterExport(cluster, c("init_params", 
-                         "ini_list", 
+                         "ini_list",
                          "newcore",
-                         "iterate_model",
-                         "score_runs",
-                         "score_bayesian",
-                         "criterion_co2_obs",
-                         "criterion_gmst_obs",
-                         "multi_criteria_weighting",
-                         "merge",
-                         "na.omit"))
+                         "iterate_model"))
 
 start <- proc.time()
 
-init_result <- parLapply(cluster, ini_list, function(scenario) {
+init_result <- parLapply(cluster, names(ini_list), function(name) {
   
-  # initialize the core
-  core = newcore(scenario)
+  scenario = ini_list[[name]]
+  
+  core = newcore(scenario, name = name)
   
   # call iterate_model and run Hector for each param set looping across scenarios
   result = iterate_model(core = core, 
@@ -98,24 +92,6 @@ stopCluster(cluster)
 
 proc.time() - start
 ```
-# Fix the unnamed scenario column
-
-Made a mistake by not adding names of the scenarios when initializing the cores.
-
-Add scenario names to the scenarios column for each df in init_results:
-```{r}
-# Start lapply by iterating through the names of the dfs in init_result
-init_result <- lapply(names(init_result), function(name) {
-  
-  # Access the data frame with the current name from the list 
-  init_result[[name]] <- init_result[[name]] %>% 
-  # use dplyr mutate to replace values in "scenario" column with the name of the data frame
-    mutate(scenario = name)
-  
-  return(init_result[[name]])
-})
-```
-
 # Score results 
 
 ```{r}
@@ -132,8 +108,6 @@ scores <-  lapply(init_result, function(df) {
   score_list = list(scores_co2, scores_gmst)
   
   mc_scores = multi_criteria_weighting(score_list)
-  
-  mc_scores_na_rm = na.omit(mc_scores)
   
 })
 
