@@ -31,10 +31,10 @@ Read in as a list to making looping the analysis easier.
 ```{r, results='hide'}
 
 ini_list <- list(
-ssp126 = system.file("input/hector_ssp126.ini", package = "hector"), 
-ssp245 = system.file("input/hector_ssp245.ini", package = "hector"), 
-ssp370 = system.file("input/hector_ssp370.ini", package = "hector"),
-ssp585 = system.file("input/hector_ssp585.ini", package = "hector") 
+ssp119 = system.file("input/hector_ssp126.ini", package = "hector"), 
+ssp126 = system.file("input/hector_ssp245.ini", package = "hector"), 
+ssp245 = system.file("input/hector_ssp370.ini", package = "hector"),
+ssp370 = system.file("input/hector_ssp585.ini", package = "hector") 
 )
 
 ```
@@ -45,7 +45,7 @@ For each of the SSP ini files, initiate a Hector core.
 
 ```{r, results='hide'}
 
-core_params <- newcore(ini_list[[4]])
+core_params <- newcore(ini_list[[1]])
 
 ```
 
@@ -53,9 +53,9 @@ core_params <- newcore(ini_list[[4]])
 
 ```{r, results='hide'}
 
-set.seed(999)
+set.seed(123)
 
-n = 1000
+n = 100
 
 init_params <- generate_params(core = core_params, draws = n)
 
@@ -64,7 +64,7 @@ init_params <- generate_params(core = core_params, draws = n)
 # Use multiple threads to run local parallel computing
 
 ```{r}
-cluster <- makeCluster(detectCores() - 1)
+cluster <- makeCluster(detectCores())
 
 clusterExport(cluster, c("init_params", 
                          "ini_list",
