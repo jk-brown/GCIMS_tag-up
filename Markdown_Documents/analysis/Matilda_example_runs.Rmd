@@ -31,10 +31,7 @@ Read in as a list to making looping the analysis easier.
 ```{r, results='hide'}
 
 ini_list <- list(
-ssp119 = system.file("input/hector_ssp126.ini", package = "hector"), 
-ssp126 = system.file("input/hector_ssp245.ini", package = "hector"), 
-ssp245 = system.file("input/hector_ssp370.ini", package = "hector"),
-ssp370 = system.file("input/hector_ssp585.ini", package = "hector") 
+ssp245 = system.file("input/hector_ssp245.ini", package = "hector")
 )
 
 ```
@@ -55,7 +52,7 @@ core_params <- newcore(ini_list[[1]])
 
 set.seed(123)
 
-n = 100
+n = 10000
 
 init_params <- generate_params(core = core_params, draws = n)
 
@@ -92,6 +89,29 @@ stopCluster(cluster)
 
 proc.time() - start
 ```
+# the above code is fucked for some reason and I can not figure it out to save my life.
+
+Trying the same thing but without parallelization:
+```{r}
+init_result <- lapply(names(ini_list), function(name) {
+  
+  scenario = ini_list[[name]]
+  
+  core = newcore(scenario, name = name)
+  
+  # call iterate_model and run Hector for each param set looping across scenarios
+  result = iterate_model(core = core, 
+                         params = init_params,
+                         save_years = 1800:2100,
+                         save_vars = c("CO2_concentration", "gmst")
+                         )
+  
+})
+```
+
+
+
+
 # Score results 
 
 ```{r}
