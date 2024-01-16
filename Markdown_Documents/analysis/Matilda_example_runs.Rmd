@@ -18,7 +18,7 @@ library(ggplot2)
 library(see)
 # force load the dev branch of Matilda to pick-up error corrections
 # if on windows and R won't install first run this in console --> options(download.file.method = "wininet") 
-remotes::install_github("jgcri/matilda@posterior_likelihood_calc", force = T)
+remotes::install_github("jgcri/matilda@dev", force = T)
 library(matilda)
 library(parallel)
 library(dplyr)
@@ -31,7 +31,10 @@ Read in as a list to making looping the analysis easier.
 ```{r, results='hide'}
 
 ini_list <- list(
-ssp245 = system.file("input/hector_ssp245.ini", package = "hector")
+ssp119 = system.file("input/hector_ssp119.ini", package = "hector"),
+ssp126 = system.file("input/hector_ssp126.ini", package = "hector"),
+ssp245 = system.file("input/hector_ssp245.ini", package = "hector"),
+ssp370 = system.file("input/hector_ssp370.ini", package = "hector")
 )
 
 ```
@@ -52,7 +55,7 @@ core_params <- newcore(ini_list[[1]])
 
 set.seed(123)
 
-n = 10000
+n = 1000
 
 init_params <- generate_params(core = core_params, draws = n)
 
@@ -61,20 +64,18 @@ init_params <- generate_params(core = core_params, draws = n)
 # Use multiple threads to run local parallel computing
 
 ```{r}
-cluster <- makeCluster(detectCores())
+cl <- makeCluster(detectCores())
 
-clusterExport(cluster, c("init_params", 
-                         "ini_list",
-                         "newcore",
-                         "iterate_model"))
+clusterExport(cl, c("init_params", 
+                    "ini_list",
+                    "newcore",
+                    "iterate_model"))
 
 start <- proc.time()
 
-init_result <- parLapply(cluster, names(ini_list), function(name) {
+init_result <- parLapply(cl, ini_list, function(scenario) {
   
-  scenario = ini_list[[name]]
-  
-  core = newcore(scenario, name = name)
+  core = newcore(scenario)
   
   # call iterate_model and run Hector for each param set looping across scenarios
   result = iterate_model(core = core, 
@@ -85,13 +86,14 @@ init_result <- parLapply(cluster, names(ini_list), function(name) {
   
 })
 
-stopCluster(cluster)
+stopCluster(cl)
 
 proc.time() - start
 ```
+
 # the above code is fucked for some reason and I can not figure it out to save my life.
 
-Trying the same thing but without parallelization:
+Trying the same thing but without parallel computing:
 ```{r}
 init_result <- lapply(names(ini_list), function(name) {
   
@@ -110,8 +112,6 @@ init_result <- lapply(names(ini_list), function(name) {
 ```
 
 
-
-
 # Score results 
 
 ```{r}
@@ -127,11 +127,23 @@ scores <-  lapply(init_result, function(df) {
   
   score_list = list(scores_co2, scores_gmst)
   
-  mc_scores = multi_criteria_weighting(score_list)
-  
 })
 
+mc_weights <- multi_criteria_weighting(scores_list = score_list)
+  
+
 ```
+
+```{r}
+scores_co2 <- score_runs(df, criterion = criterion_co2_obs(), score_bayesian)
+scores_gmst <- score_runs(df, criterion = criterion_gmst_obs(), score_bayesian)
+  list(co2 = scores_co2, gmst = scores_gmst)
+
+# Combine the individual scores into a single list for multi-criteria weighting
+mc_scores <- multi_criteria_weighting(scores$ssp370)
+```
+
+
 
 # Calulating metrics 
 
