@@ -18,7 +18,7 @@ library(ggplot2)
 library(see)
 # force load the dev branch of Matilda to pick-up error corrections
 # if on windows and R won't install first run this in console --> options(download.file.method = "wininet") 
-remotes::install_github("jgcri/matilda@dev", force = T)
+remotes::install_github("jgcri/matilda@posterior_likelihood_calc", force = T)
 library(matilda)
 library(parallel)
 library(dplyr)
@@ -45,7 +45,7 @@ For each of the SSP ini files, initiate a Hector core.
 
 ```{r, results='hide'}
 
-core_params <- newcore(ini_list[[1]])
+core_params <- newcore(ini_list[[4]])
 
 ```
 
@@ -55,7 +55,7 @@ core_params <- newcore(ini_list[[1]])
 
 set.seed(123)
 
-n = 1000
+n = 10000
 
 init_params <- generate_params(core = core_params, draws = n)
 
@@ -95,22 +95,18 @@ proc.time() - start
 
 Trying the same thing but without parallel computing:
 ```{r}
-init_result <- lapply(names(ini_list), function(name) {
-  
-  scenario = ini_list[[name]]
-  
-  core = newcore(scenario, name = name)
-  
-  # call iterate_model and run Hector for each param set looping across scenarios
-  result = iterate_model(core = core, 
-                         params = init_params,
-                         save_years = 1800:2100,
-                         save_vars = c("CO2_concentration", "gmst")
-                         )
-  
-})
-```
+# Using lapply to add the names of data frames to the "scenarios" column
 
+init_result <- lapply(names(init_result), function(df_name) {
+  
+  df <- init_result[[df_name]]
+  
+  df$scenario <- df_name
+  
+  return(df)
+})
+
+```
 
 # Score results 
 
@@ -120,30 +116,24 @@ scores <-  lapply(init_result, function(df) {
   scores_co2 = score_runs(df, 
                           criterion = criterion_co2_obs(),
                           score_bayesian)
+  scores_co2 = na.omit(scores_co2)
   
   scores_gmst = score_runs(df, 
                            criterion = criterion_gmst_obs(),
                            score_bayesian)
+  scores_gmst = na.omit(scores_gmst)
   
-  score_list = list(scores_co2, scores_gmst)
+  list = list(scores_co2, scores_gmst)
   
 })
 
-mc_weights <- multi_criteria_weighting(scores_list = score_list)
+mc_weights <- lapply(scores, function(score_list){
   
-
+  mc_weights_df <- multi_criteria_weighting(score_list)
+  
+})
+  
 ```
-
-```{r}
-scores_co2 <- score_runs(df, criterion = criterion_co2_obs(), score_bayesian)
-scores_gmst <- score_runs(df, criterion = criterion_gmst_obs(), score_bayesian)
-  list(co2 = scores_co2, gmst = scores_gmst)
-
-# Combine the individual scores into a single list for multi-criteria weighting
-mc_scores <- multi_criteria_weighting(scores$ssp370)
-```
-
-
 
 # Calulating metrics 
 
@@ -167,13 +157,278 @@ metric_result <- lapply(init_result, function(df){
 # Merge scores with metrics
 
 ```{r}
-metric_scored <- Map(merge, metric_result, scores, by = "run_number")
+metric_scored <- lapply(init_result, function(df){
+  
+  result_na_rm <- na.omit(df)
+  
+  metric_calc(result_na_rm, long_term_metric)
+})
 
-# bind to combined data frame
+# Adding scenario column to each metric df
+scenario_identifiers <- c('ssp119', 'ssp126', 'ssp245', 'ssp370')
+
+# Add a new column "scenario"to each data frame with the respective identifier
+metric_result <- Map(function(df, scenario) {
+  df$scenario <- scenario
+  return(df)
+}, metric_result, scenario_identifiers)
+```
+
+# Merge scores with metrics
+```{r}
+metric_scored <- Map(merge, metric_result, mc_weights, by = "run_number")
+
+# bind to combined data frame 
 full_metric_df <- do.call(rbind, metric_scored)
 row.names(full_metric_df) <- NULL
+```
 
-full_metric_df$scenario <- rep(c("ssp126", "ssp245", "ssp370", "ssp585"), each = n)
+# Probability stacked bar for this data
+```{r}
+bins <- c(1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, Inf)
+
+prob_results <- lapply(metric_scored, function(df) {
+  
+  prob_calc(df$metric_result,
+            bins = bins, 
+            scores = df$mc_weight)
+})
+
+# name the data frames
+names(prob_results) <- c("ssp119", "ssp126", "ssp245", "ssp370")
+```
+
+Add column of scenario names:
+```{r}
+prob_results <- lapply(names(prob_results), function(df_name) {
+  
+  df <- prob_results[[df_name]]
+  
+  df$scenario <- df_name
+  
+  return(df)
+})
+```
+
+Build probability data frame:
+
+```{r}
+prob_df <- do.call(rbind, prob_results)
+row.names(prob_df) <- NULL
+prob_df$scenario <- as.factor(prob_df$scenario)
+```
+
+# plot
+
+```{r}
+prob_plot <- 
+  ggplot(data = prob_df,
+         aes(
+           fill = bins,
+           x = scenario,
+           y = probability)) +
+  geom_bar(position = position_fill(reverse = T),
+           stat = "identity",
+           width = 0.6) +
+  scale_y_continuous(breaks = seq(0.0, 1.0, 0.1)) +
+  scale_fill_manual(
+    values = c(
+      "#2166AC",
+      "#4393C3",
+      "#D1E5f0",
+      "#FDDBC7",
+      "#F4A582",
+      "#D6604D",
+      "#B2182B",
+      "#67001F"),
+    labels = c(
+      expression(paste("1.0 to 1.5", ~degree, "C")),
+      expression(paste("1.5 to 2.0", ~degree, "C")),
+      expression(paste("2.0 to 2.5", ~degree, "C")),
+      expression(paste("2.5 to 3.0", ~degree, "C")),
+      expression(paste("3.0 to 3.5", ~degree, "C")),
+      expression(paste("3.5 to 4.0", ~degree, "C")),
+      expression(paste("4.0 to 4.5", ~degree, "C")),
+      expression(paste(" > 4.5", ~degree, "C"))),
+    name = "Warming") +
+  labs(y = "Probability",
+       x = "Forcing Scenario", 
+       title = "Probability of Warming") +
+  coord_flip() +
+  theme_light() +
+  theme(legend.position = "bottom")
+prob_plot
+
+ggsave("probability_bar.png",
+       prob_plot,
+       device = "png",
+       height = 7,
+       width = 8,
+       units = "in")
+```
+# Plotting distribution with shading
+
+Only want to plot ssp245 and ssp370
+
+```{r}
+temp_dist_370 <- subset(full_metric_df,
+                       scenario == c("ssp370")) 
+temp_dist_370$scenario <- as.factor(temp_dist_370$scenario)
+
+temp_dist_245 <- subset(full_metric_df,
+                       scenario == c("ssp245")) 
+temp_dist_245$scenario <- as.factor(temp_dist_245$scenario)
+```
+
+```{r}
+density_val370 <- density(temp_dist_370$metric_result)
+density_val245 <- density(temp_dist_245$metric_result)
+
+dens370 <- data.frame(
+  x = density_val370$x,
+  y = density_val370$y)
+
+dens245 <- data.frame(
+  x = density_val245$x,
+  y = density_val245$y)
+```
+
+# Plotting warming likelihood as density curve for ssp370:
+
+```{r}
+# Define breaks and corresponding colors
+breaks <- c(1, 1.5, 2, 2.5, 3.0, 3.5, 4.0, 4.5, Inf)
+colors <- c(
+  "#2166AC",
+  "#4393C3",
+  "#D1E5f0",
+  "#FDDBC7",
+  "#F4A582",
+  "#D6604D",
+  "#B2182B",
+  "#67001F")
+
+# Create intervals and assign colors
+dens370$interval <- cut(dens370$x, 
+                     breaks = breaks, 
+                     labels = colors, 
+                     include.lowest = TRUE)
+
+# Plot using ggplot
+temp_likelihood_370 <-
+  ggplot(dens370, aes(x = x, y = y, fill = interval)) +
+  geom_area() +
+  scale_fill_manual(values = colors, guide = NULL) +
+  xlim(1, 7) +
+  labs(title = "Warming Likelihood",
+       x = "Temperature (C)",
+       y = "Density") +
+  theme_light()
+temp_likelihood_370
+
+ggsave(
+  "temp_likelihood_370.png",
+  temp_likelihood_370,
+  device = "png",
+  height = 7,
+  width = 8,
+  units = "in"
+)
+```
+
+# Plotting warming likelihood as density curve for ssp245:
+
+```{r}
+# Define breaks and corresponding colors
+breaks <- c(1, 1.5, 2, 2.5, 3.0, 3.5, 4.0, 4.5, Inf)
+colors <- c(
+  "#2166AC",
+  "#4393C3",
+  "#D1E5f0",
+  "#FDDBC7",
+  "#F4A582",
+  "#D6604D",
+  "#B2182B",
+  "#67001F")
+
+# Create intervals and assign colors
+dens245$interval <- cut(dens245$x, 
+                     breaks = breaks, 
+                     labels = colors, 
+                     include.lowest = TRUE)
+
+# Plot using ggplot
+temp_likelihood_245 <-
+  ggplot(dens245, aes(x = x, y = y, fill = interval)) +
+  geom_area() +
+  scale_fill_manual(values = colors, guide = NULL) +
+  labs(title = "Warming Likelihood",
+       x = "Temperature (C)",
+       y = "Density") +
+  xlim(1, 7) +
+  theme_light()
+temp_likelihood_245
+
+ggsave(
+  "temp_likelihood_245.png",
+  temp_likelihood_245,
+  device = "png",
+  height = 7,
+  width = 8,
+  units = "in"
+)
+```
+
+
+___
+
+Interested in seeing how this integrates and whether it is close to the probability my function calculates:
+```{r}
+# function to integrate density 
+integrate_density <- function(density_function, range_start, range_end) {
+  integrate(density_function, range_start, range_end)$value
+}
+
+density_function <- approxfun(dens370$x, dens370$y)
+probability <- integrate_density(density_function, 4.0, 4.5)
+```
+
+
+
+```{r}
+ggplot() +
+  geom_histogram(data = temp_dist_df,
+                 aes(x = posterior, fill = cut(posterior, 
+                                               breaks = c(1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, Inf),
+                                               labels = c(
+                                                 "1.0 to 1.5 °C",
+                                                 "1.5 to 2.0 °C",
+                                                 "2.0 to 2.5 °C",
+                                                 "2.5 to 3.0 °C",
+                                                 "3.0 to 3.5 °C",
+                                                 "3.5 to 4.0 °C",
+                                                 "4.0 to 4.5 °C",
+                                                 "> 4.5 °C"))),
+                 binwidth = 0.1, 
+                 position = "identity") +
+  scale_fill_manual(values = c(
+      "#2166AC",
+      "#4393C3",
+      "#D1E5f0",
+      "#FDDBC7",
+      "#F4A582",
+      "#D6604D",
+      "#B2182B",
+      "#67001F"
+    ),
+    guide = NULL) +
+  labs(title = "Frequency Distribution of Temperatures",
+       x = "Temperature",
+       y = "Frequency") +
+
+  theme_light()
+
+
 ```
 
 # Now that I have median warming metrics with likelihood weights!
